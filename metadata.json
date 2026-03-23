@@ -1,0 +1,5 @@
+{
+  "name": "PennyWise Budget Tracker",
+  "description": "A lightweight personal finance tracker for managing cash and online funds with fixed and variable expense logging.",
+  "requestFramePermissions": []
+}
