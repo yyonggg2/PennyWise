@@ -1,20 +1,55 @@
-export type Currency = 'CAD' | 'USD' | 'EUR' | 'GBP' | 'JPY' | 'CNY' | 'AUD' | 'CHF' | 'HKD' | 'MXN';
+export type Currency =
+  | "CAD"
+  | "USD"
+  | "EUR"
+  | "GBP"
+  | "JPY"
+  | "CNY"
+  | "AUD"
+  | "CHF"
+  | "HKD"
+  | "MXN";
 
-export const CURRENCIES: Currency[] = ['CAD', 'USD', 'EUR', 'GBP', 'JPY', 'CNY', 'AUD', 'CHF', 'HKD', 'MXN'];
+export const CURRENCIES: Currency[] = [
+  "CAD",
+  "USD",
+  "EUR",
+  "GBP",
+  "JPY",
+  "CNY",
+  "AUD",
+  "CHF",
+  "HKD",
+  "MXN",
+];
 
 export const CURRENCY_SYMBOLS: Record<Currency, string> = {
-  CAD: 'CA$', USD: '$', EUR: '€', GBP: '£', JPY: '¥',
-  CNY: '¥', AUD: 'A$', CHF: 'Fr', HKD: 'HK$', MXN: 'MX$',
+  CAD: "CA$",
+  USD: "$",
+  EUR: "€",
+  GBP: "£",
+  JPY: "¥",
+  CNY: "¥",
+  AUD: "A$",
+  CHF: "Fr",
+  HKD: "HK$",
+  MXN: "MX$",
 };
 
 export const CURRENCY_NAMES: Record<Currency, string> = {
-  CAD: 'Canadian Dollar', USD: 'US Dollar', EUR: 'Euro',
-  GBP: 'British Pound', JPY: 'Japanese Yen', CNY: 'Chinese Yuan',
-  AUD: 'Australian Dollar', CHF: 'Swiss Franc',
-  HKD: 'Hong Kong Dollar', MXN: 'Mexican Peso',
+  CAD: "Canadian Dollar",
+  USD: "US Dollar",
+  EUR: "Euro",
+  GBP: "British Pound",
+  JPY: "Japanese Yen",
+  CNY: "Chinese Yuan",
+  AUD: "Australian Dollar",
+  CHF: "Swiss Franc",
+  HKD: "Hong Kong Dollar",
+  MXN: "Mexican Peso",
 };
 
-export type Frequency = 'daily' | 'weekly' | 'monthly' | 'yearly';
+export type Frequency = "daily" | "weekly" | "monthly" | "yearly";
 
 export interface Card {
   id: string;
@@ -28,7 +63,18 @@ export interface InitialFunds {
   other: number;
 }
 
-export interface VariableExpense {
+export interface OutputExpense {
+  id: string;
+  amount: number;
+  currency: Currency;
+  amountInPrimary: number;
+  category: string;
+  note: string;
+  date: string;
+  method: string; // 'cash' | 'digital' | 'other' | card.id
+}
+
+export interface InputExpense {
   id: string;
   amount: number;
   currency: Currency;
@@ -58,7 +104,8 @@ export interface AppState {
   hasOther: boolean;
   initialFunds: InitialFunds;
   fixedExpenses: FixedExpense[];
-  variableExpenses: VariableExpense[];
+  variableExpenses: OutputExpense[];
+  inputExpenses: InputExpense[];
   categories: string[];
   isSetupComplete: boolean;
   userEmail: string | null;

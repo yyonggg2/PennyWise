@@ -25,7 +25,8 @@ import {
 import { motion, AnimatePresence } from "motion/react";
 import {
   AppState,
-  VariableExpense,
+  OutputExpense,
+  InputExpense,
   FixedExpense,
   Frequency,
   Card,
@@ -61,6 +62,7 @@ const INITIAL_STATE: AppState = {
   initialFunds: { cash: 0, digital: 0, other: 0 },
   fixedExpenses: [],
   variableExpenses: [],
+  inputExpenses: [],
   categories: DEFAULT_CATEGORIES,
   isSetupComplete: false,
   userEmail: null,
@@ -69,7 +71,13 @@ const INITIAL_STATE: AppState = {
   exchangeRates: {},
 };
 
-type Screen = "Home" | "AddExpense" | "FixedExpenses" | "History" | "Settings";
+type Screen =
+  | "Home"
+  | "AddExpense"
+  | "AddIncome"
+  | "FixedExpenses"
+  | "History"
+  | "Settings";
 
 export default function App() {
   const [session, setSession] = useState(null);
@@ -89,7 +97,7 @@ export default function App() {
 
   const [state, setState] = useState<AppState>(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
-    return saved ? JSON.parse(saved) : INITIAL_STATE;
+    return saved ? { ...INITIAL_STATE, ...JSON.parse(saved) } : INITIAL_STATE;
   });
 
   const [currentScreen, setCurrentScreen] = useState<Screen>("Home");
@@ -125,19 +133,24 @@ export default function App() {
         .filter((e) => e.method === method)
         .reduce((sum, e) => sum + e.amountInPrimary, 0);
 
+    const getInput = (method: string) =>
+      state.inputExpenses
+        .filter((e) => e.method === method)
+        .reduce((sum, e) => sum + e.amountInPrimary, 0);
+
     const cashBalance = state.hasCash
-      ? state.initialFunds.cash - getSpent("cash")
+      ? state.initialFunds.cash - getSpent("cash") + getInput("cash")
       : 0;
     const digitalBalance = state.hasDigital
-      ? state.initialFunds.digital - getSpent("digital")
+      ? state.initialFunds.digital - getSpent("digital") + getInput("digital")
       : 0;
     const otherBalance = state.hasOther
-      ? state.initialFunds.other - getSpent("other")
+      ? state.initialFunds.other - getSpent("other") + getInput("other")
       : 0;
 
     const cardBalances = state.cards.map((card) => ({
       card,
-      balance: card.initialBalance - getSpent(card.id),
+      balance: card.initialBalance - getSpent(card.id) + getInput(card.id),
     }));
 
     const totalBalance =
@@ -174,10 +187,8 @@ export default function App() {
     }
   };
 
-  const addVariableExpense = (
-    expense: Omit<VariableExpense, "id" | "date">,
-  ) => {
-    const newExpense: VariableExpense = {
+  const addOutputExpense = (expense: Omit<OutputExpense, "id" | "date">) => {
+    const newExpense: OutputExpense = {
       ...expense,
       id: crypto.randomUUID(),
       date: new Date().toISOString(),
@@ -189,7 +200,20 @@ export default function App() {
     setCurrentScreen("Home");
   };
 
-  const deleteVariableExpense = (id: string) => {
+  const addInputExpense = (expense: Omit<InputExpense, "id" | "date">) => {
+    const newExpense: InputExpense = {
+      ...expense,
+      id: crypto.randomUUID(),
+      date: new Date().toISOString(),
+    };
+    setState((prev) => ({
+      ...prev,
+      inputExpenses: [newExpense, ...prev.inputExpenses],
+    }));
+    setCurrentScreen("Home");
+  };
+
+  const deleteOutputExpense = (id: string) => {
     setState((prev) => ({
       ...prev,
       variableExpenses: prev.variableExpenses.filter((e) => e.id !== id),
@@ -351,24 +375,6 @@ export default function App() {
                 </div>
               )}
 
-              {/* Quick Actions */}
-              <div className="grid grid-cols-2 gap-4">
-                <button
-                  onClick={() => setCurrentScreen("AddExpense")}
-                  className="bg-slate-400 text-white rounded-2xl p-4 flex flex-col items-center justify-center gap-2 hover:bg-slate-500 transition-colors shadow-sm shadow-slate-200"
-                >
-                  <PlusCircle size={24} />
-                  <span className="text-sm font-medium">Record Expense</span>
-                </button>
-                <button
-                  onClick={() => setCurrentScreen("FixedExpenses")}
-                  className="bg-white border border-black/5 rounded-2xl p-4 flex flex-col items-center justify-center gap-2 hover:bg-black/5 transition-colors"
-                >
-                  <Calendar size={24} />
-                  <span className="text-sm font-medium">Fixed Items</span>
-                </button>
-              </div>
-
               {/* Recent Activity */}
               <div className="space-y-4">
                 <div className="flex justify-between items-end">
@@ -383,39 +389,58 @@ export default function App() {
                   </button>
                 </div>
                 <div className="space-y-2">
-                  {state.variableExpenses.slice(0, 5).map((expense) => (
-                    <div
-                      key={expense.id}
-                      className="bg-white rounded-2xl p-4 border border-black/5 flex justify-between items-center"
-                    >
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-full bg-[#F5F5F5] flex items-center justify-center text-lg">
-                          {getCategoryEmoji(expense.category)}
+                  {[
+                    ...state.variableExpenses.map((e) => ({
+                      ...e,
+                      kind: "expense" as const,
+                    })),
+                    ...state.inputExpenses.map((e) => ({
+                      ...e,
+                      kind: "income" as const,
+                    })),
+                  ]
+                    .sort(
+                      (a, b) =>
+                        new Date(b.date).getTime() - new Date(a.date).getTime(),
+                    )
+                    .slice(0, 5)
+                    .map((entry) => (
+                      <div
+                        key={entry.id}
+                        className="bg-white rounded-2xl p-4 border border-black/5 flex justify-between items-center"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-full bg-[#F5F5F5] flex items-center justify-center text-lg">
+                            {getCategoryEmoji(entry.category)}
+                          </div>
+                          <div>
+                            <p className="text-sm font-medium">
+                              {entry.category}
+                            </p>
+                            <p className="text-[10px] text-black/40">
+                              {new Date(entry.date).toLocaleDateString()}
+                            </p>
+                          </div>
                         </div>
-                        <div>
-                          <p className="text-sm font-medium">
-                            {expense.category}
+                        <div className="text-right">
+                          <p
+                            className={`text-sm font-semibold ${entry.kind === "income" ? "text-green-500" : ""}`}
+                          >
+                            {entry.kind === "income" ? "+" : "-"}$
+                            {entry.amount.toLocaleString()}
                           </p>
-                          <p className="text-[10px] text-black/40">
-                            {new Date(expense.date).toLocaleDateString()}
+                          <p className="text-[10px] text-black/40 uppercase tracking-tighter">
+                            {entry.method}
                           </p>
                         </div>
                       </div>
-                      <div className="text-right">
-                        <p className="text-sm font-semibold">
-                          -${expense.amount.toLocaleString()}
-                        </p>
-                        <p className="text-[10px] text-black/40 uppercase tracking-tighter">
-                          {expense.method}
-                        </p>
+                    ))}
+                  {state.variableExpenses.length === 0 &&
+                    state.inputExpenses.length === 0 && (
+                      <div className="py-12 text-center text-black/30">
+                        <p className="text-sm">No transactions logged yet.</p>
                       </div>
-                    </div>
-                  ))}
-                  {state.variableExpenses.length === 0 && (
-                    <div className="py-12 text-center text-black/30">
-                      <p className="text-sm">No expenses logged yet.</p>
-                    </div>
-                  )}
+                    )}
                 </div>
               </div>
             </motion.div>
@@ -436,7 +461,28 @@ export default function App() {
                 hasDigital={state.hasDigital}
                 hasOther={state.hasOther}
                 cards={state.cards}
-                onSubmit={addVariableExpense}
+                onSubmit={addOutputExpense}
+                onSubmitIncome={addInputExpense}
+                onCancel={() => setCurrentScreen("Home")}
+              />
+            </motion.div>
+          )}
+
+          {currentScreen === "AddIncome" && (
+            <motion.div
+              key="add"
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+            >
+              <InputForm
+                primaryCurrency={state.primaryCurrency}
+                exchangeRates={state.exchangeRates}
+                hasCash={state.hasCash}
+                hasDigital={state.hasDigital}
+                hasOther={state.hasOther}
+                cards={state.cards}
+                onSubmit={addInputExpense}
                 onCancel={() => setCurrentScreen("Home")}
               />
             </motion.div>
@@ -562,7 +608,7 @@ export default function App() {
                         </p>
                       </div>
                       <button
-                        onClick={() => deleteVariableExpense(expense.id)}
+                        onClick={() => deleteOutputExpense(expense.id)}
                         className="text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
                       >
                         <Trash2 size={16} />
@@ -987,7 +1033,9 @@ function SetupWizard({
                     className="w-full bg-white rounded-xl py-2 px-3 text-sm outline-none border border-black/5"
                   />
                   <div className="flex items-center bg-white rounded-xl border border-black/5 overflow-hidden">
-                    <span className="pl-3 pr-1 text-black/30 text-sm whitespace-nowrap">{sym}</span>
+                    <span className="pl-3 pr-1 text-black/30 text-sm whitespace-nowrap">
+                      {sym}
+                    </span>
                     <input
                       type="number"
                       value={card.initialBalance || ""}
@@ -1511,6 +1559,7 @@ function ExpenseForm({
   hasOther,
   cards,
   onSubmit,
+  onSubmitIncome,
   onCancel,
 }: {
   categories: string[];
@@ -1520,9 +1569,11 @@ function ExpenseForm({
   hasDigital: boolean;
   hasOther: boolean;
   cards: Card[];
-  onSubmit: (expense: Omit<VariableExpense, "id" | "date">) => void;
+  onSubmit: (expense: Omit<OutputExpense, "id" | "date">) => void;
+  onSubmitIncome: (expense: Omit<InputExpense, "id" | "date">) => void;
   onCancel: () => void;
 }) {
+  const [type, setType] = useState<"expense" | "income">("expense");
   const [amount, setAmount] = useState("");
   const [currency, setCurrency] = useState<Currency>(primaryCurrency);
   const [category, setCategory] = useState(categories[0]);
@@ -1543,14 +1594,20 @@ function ExpenseForm({
     e.preventDefault();
     if (!amount) return;
     const raw = parseFloat(amount);
-    onSubmit({
+    if (raw <= 0) return;
+    const payload = {
       amount: raw,
       currency,
       amountInPrimary: convertToPrimary(raw, currency),
       category,
       note,
       method,
-    });
+    };
+    if (type === "expense") {
+      onSubmit(payload);
+    } else {
+      onSubmitIncome(payload);
+    }
   };
 
   const paymentOptions = [
@@ -1565,7 +1622,20 @@ function ExpenseForm({
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
-        <h2 className="text-xl font-semibold tracking-tight">Add Expense</h2>
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center gap-2">
+            <h2 className="text-xl font-semibold tracking-tight">
+              {type === "expense" ? "Add Expense" : "Add Income"}
+            </h2>
+            <button
+              type="button"
+              onClick={() => setType(type === "expense" ? "income" : "expense")}
+              className="text-sm text-black/40 hover:text-black/60 transition-colors"
+            >
+              {type === "expense" ? "Add Income ↓" : "Add Expense ↓"}
+            </button>
+          </div>
+        </div>
         <button
           onClick={onCancel}
           className="p-2 hover:bg-black/5 rounded-full"
@@ -1594,9 +1664,12 @@ function ExpenseForm({
                 ))}
               </select>
               <div className="flex items-center flex-1 bg-white border border-black/5 rounded-2xl focus-within:ring-2 focus-within:ring-slate-400 transition-all overflow-hidden">
-                <span className="pl-4 pr-1 text-black/30 text-sm whitespace-nowrap">{sym}</span>
+                <span className="pl-4 pr-1 text-black/30 text-sm whitespace-nowrap">
+                  {sym}
+                </span>
                 <input
                   type="number"
+                  min="0"
                   value={amount}
                   onChange={(e) => setAmount(e.target.value)}
                   placeholder="0.00"
@@ -1841,4 +1914,165 @@ function getCategoryEmoji(category: string) {
     default:
       return "💰";
   }
+}
+
+function InputForm({
+  primaryCurrency,
+  exchangeRates,
+  hasCash,
+  hasDigital,
+  hasOther,
+  cards,
+  onSubmit,
+  onCancel,
+}: {
+  primaryCurrency: Currency;
+  exchangeRates: Record<string, number>;
+  hasCash: boolean;
+  hasDigital: boolean;
+  hasOther: boolean;
+  cards: Card[];
+  onSubmit: (expense: Omit<InputExpense, "id" | "date">) => void;
+  onCancel: () => void;
+}) {
+  const [amount, setAmount] = useState("");
+  const [currency, setCurrency] = useState<Currency>(primaryCurrency);
+  const [note, setNote] = useState("");
+
+  const defaultMethod = hasCash
+    ? "cash"
+    : (cards[0]?.id ?? (hasDigital ? "digital" : "other"));
+  const [method, setMethod] = useState(defaultMethod);
+
+  const convertToPrimary = (amt: number, cur: Currency) => {
+    if (cur === primaryCurrency) return amt;
+    const rate = exchangeRates[cur];
+    return rate ? amt / rate : amt;
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!amount) return;
+    const raw = parseFloat(amount);
+    if (raw <= 0) return;
+    onSubmit({
+      amount: raw,
+      currency,
+      amountInPrimary: convertToPrimary(raw, currency),
+      category: "Income",
+      note,
+      method,
+    });
+  };
+
+  const accountOptions = [
+    ...(hasCash ? [{ id: "cash", label: "Cash" }] : []),
+    ...cards.map((c) => ({ id: c.id, label: c.name })),
+    ...(hasDigital ? [{ id: "digital", label: "Digital" }] : []),
+    ...(hasOther ? [{ id: "other", label: "Other" }] : []),
+  ];
+
+  const sym = CURRENCY_SYMBOLS[currency];
+
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <h2 className="text-xl font-semibold tracking-tight">Add Income</h2>
+        <button
+          onClick={onCancel}
+          className="p-2 hover:bg-black/5 rounded-full"
+        >
+          <X size={20} />
+        </button>
+      </div>
+
+      <form onSubmit={handleSubmit} className="space-y-6">
+        <div className="space-y-4">
+          {/* Amount + Currency */}
+          <div className="space-y-2">
+            <label className="text-xs font-semibold uppercase tracking-wider text-black/40">
+              Amount
+            </label>
+            <div className="flex gap-2">
+              <select
+                value={currency}
+                onChange={(e) => setCurrency(e.target.value as Currency)}
+                className="bg-[#F5F5F5] border-none rounded-xl py-4 px-3 text-sm font-bold outline-none"
+              >
+                {CURRENCIES.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+              <div className="flex items-center flex-1 bg-white border border-black/5 rounded-2xl focus-within:ring-2 focus-within:ring-slate-400 transition-all overflow-hidden">
+                <span className="pl-4 pr-1 text-black/30 text-sm whitespace-nowrap">
+                  {sym}
+                </span>
+                <input
+                  type="number"
+                  min="0"
+                  value={amount}
+                  onChange={(e) => setAmount(e.target.value)}
+                  placeholder="0.00"
+                  autoFocus
+                  className="flex-1 bg-transparent py-4 pr-4 outline-none"
+                  required
+                />
+              </div>
+            </div>
+            {currency !== primaryCurrency && amount && (
+              <p className="text-xs text-black/40 pl-1">
+                ≈ {CURRENCY_SYMBOLS[primaryCurrency]}
+                {convertToPrimary(parseFloat(amount) || 0, currency).toFixed(
+                  2,
+                )}{" "}
+                {primaryCurrency}
+              </p>
+            )}
+          </div>
+
+          {/* Account */}
+          <div className="space-y-2">
+            <label className="text-xs font-semibold uppercase tracking-wider text-black/40">
+              Add to
+            </label>
+            <div className="flex flex-wrap gap-2">
+              {accountOptions.map((opt) => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => setMethod(opt.id)}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold uppercase border transition-all ${method === opt.id ? "bg-slate-400 text-white border-slate-400" : "bg-white text-black/60 border-black/5 hover:border-slate-200"}`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Note */}
+          <div className="space-y-2">
+            <label className="text-xs font-semibold uppercase tracking-wider text-black/40">
+              Note (Optional)
+            </label>
+            <input
+              type="text"
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="e.g. Salary, Freelance..."
+              className="w-full bg-white border border-black/5 rounded-2xl py-4 px-4 focus:ring-2 focus:ring-slate-400 outline-none transition-all"
+            />
+          </div>
+        </div>
+
+        <button
+          type="submit"
+          className="w-full bg-slate-400 text-white py-4 rounded-2xl font-semibold hover:bg-slate-500 transition-colors shadow-lg shadow-slate-100"
+        >
+          Save Income
+        </button>
+      </form>
+    </div>
+  );
 }
