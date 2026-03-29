@@ -102,6 +102,9 @@ export default function App() {
 
   const [currentScreen, setCurrentScreen] = useState<Screen>("Home");
   const [isAddingFixed, setIsAddingFixed] = useState(false);
+  const [historyFilter, setHistoryFilter] = useState<
+    "all" | "income" | "expense"
+  >("all");
 
   // Persist state to localStorage
   useEffect(() => {
@@ -217,6 +220,13 @@ export default function App() {
     setState((prev) => ({
       ...prev,
       variableExpenses: prev.variableExpenses.filter((e) => e.id !== id),
+    }));
+  };
+
+  const deleteInputExpense = (id: string) => {
+    setState((prev) => ({
+      ...prev,
+      inputExpenses: prev.inputExpenses.filter((e) => e.id !== id),
     }));
   };
 
@@ -574,48 +584,92 @@ export default function App() {
               <h2 className="text-xl font-semibold tracking-tight">
                 Transaction History
               </h2>
-              <div className="space-y-2">
-                {state.variableExpenses.map((expense) => (
-                  <div
-                    key={expense.id}
-                    className="bg-white rounded-2xl p-4 border border-black/5 flex justify-between items-center group"
+              <div className="flex gap-2">
+                {(["all", "income", "expense"] as const).map((f) => (
+                  <button
+                    key={f}
+                    onClick={() => setHistoryFilter(f)}
+                    className={`px-4 py-1.5 rounded-full text-xs font-bold uppercase transition-all ${
+                      historyFilter === f
+                        ? "bg-slate-400 text-white"
+                        : "bg-black/5 text-black/40"
+                    }`}
                   >
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-full bg-[#F5F5F5] flex items-center justify-center text-lg">
-                        {getCategoryEmoji(expense.category)}
-                      </div>
-                      <div>
-                        <p className="text-sm font-medium">
-                          {expense.category}
-                        </p>
-                        <p className="text-[10px] text-black/40">
-                          {new Date(expense.date).toLocaleString()}
-                        </p>
-                        {expense.note && (
-                          <p className="text-[10px] text-black/60 italic mt-1">
-                            "{expense.note}"
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-4">
-                      <div className="text-right">
-                        <p className="text-sm font-semibold">
-                          -${expense.amount.toLocaleString()}
-                        </p>
-                        <p className="text-[10px] text-black/40 uppercase tracking-tighter">
-                          {expense.method}
-                        </p>
-                      </div>
-                      <button
-                        onClick={() => deleteOutputExpense(expense.id)}
-                        className="text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
-                  </div>
+                    {f}
+                  </button>
                 ))}
+              </div>
+              <div className="space-y-2">
+                {[
+                  ...state.variableExpenses.map((e) => ({
+                    ...e,
+                    kind: "expense" as const,
+                  })),
+                  ...state.inputExpenses.map((e) => ({
+                    ...e,
+                    kind: "income" as const,
+                  })),
+                ]
+                  .sort(
+                    (a, b) =>
+                      new Date(b.date).getTime() - new Date(a.date).getTime(),
+                  )
+                  .filter(
+                    (entry) =>
+                      historyFilter === "all" || entry.kind === historyFilter,
+                  )
+                  .map((entry) => (
+                    <div
+                      key={entry.id}
+                      className="bg-white rounded-2xl p-4 border border-black/5 flex justify-between items-center group"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-full bg-[#F5F5F5] flex items-center justify-center text-lg">
+                          {entry.kind === "income"
+                            ? "💰"
+                            : getCategoryEmoji(entry.category)}
+                        </div>
+                        <div>
+                          <p className="text-sm font-medium">
+                            {entry.kind === "income"
+                              ? "Income"
+                              : entry.category}
+                          </p>
+                          <p className="text-[10px] text-black/40">
+                            {new Date(entry.date).toLocaleString()}
+                          </p>
+                          {entry.note && (
+                            <p className="text-[10px] text-black/60 italic mt-1">
+                              "{entry.note}"
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-4">
+                        <div className="text-right">
+                          <p
+                            className={`text-sm font-semibold ${entry.kind === "income" ? "text-green-500" : "text-red-400"}`}
+                          >
+                            {entry.kind === "income" ? "+" : "-"}$
+                            {entry.amount.toLocaleString()}
+                          </p>
+                          <p className="text-[10px] text-black/40 uppercase tracking-tighter">
+                            {entry.method}
+                          </p>
+                        </div>
+                        <button
+                          onClick={() =>
+                            entry.kind === "expense"
+                              ? deleteOutputExpense(entry.id)
+                              : deleteInputExpense(entry.id)
+                          }
+                          className="text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
               </div>
             </motion.div>
           )}
