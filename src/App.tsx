@@ -30,6 +30,7 @@ import {
   FixedExpense,
   Frequency,
   Card,
+  Digital,
   Currency,
   CURRENCIES,
   CURRENCY_SYMBOLS,
@@ -57,9 +58,8 @@ const INITIAL_STATE: AppState = {
   primaryCurrency: "CAD",
   cards: [],
   hasCash: false,
-  hasDigital: false,
-  hasOther: false,
-  initialFunds: { cash: 0, digital: 0, other: 0 },
+  digitalAccount: [],
+  initialFunds: { cash: 0 },
   fixedExpenses: [],
   variableExpenses: [],
   inputExpenses: [],
@@ -81,9 +81,26 @@ type Screen =
 
 export default function App() {
   const [session, setSession] = useState(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [state, setState] = useState<AppState>(INITIAL_STATE);
+
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
       setSession(session);
+      if (session) {
+        const { data } = await supabase
+          .from("user_data")
+          .select("state")
+          .eq("user_id", session.user.id)
+          .single();
+        if (data?.state) {
+          setState({ ...INITIAL_STATE, ...JSON.parse(data.state) });
+        } else {
+          const saved = localStorage.getItem(STORAGE_KEY);
+          if (saved) setState({ ...INITIAL_STATE, ...JSON.parse(saved) });
+        }
+      }
+      setAuthReady(true);
     });
 
     const {
@@ -95,30 +112,37 @@ export default function App() {
     return () => subscription.unsubscribe();
   }, []);
 
-  const [state, setState] = useState<AppState>(() => {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    return saved ? { ...INITIAL_STATE, ...JSON.parse(saved) } : INITIAL_STATE;
-  });
-
   const [currentScreen, setCurrentScreen] = useState<Screen>("Home");
   const [isAddingFixed, setIsAddingFixed] = useState(false);
-  const [historyFilter, setHistoryFilter] = useState<
-    "all" | "income" | "expense"
-  >("all");
+  const [historyFilter, setHistoryFilter] = useState<"all" | "income" | "expense">("all");
+  const [newCardForm, setNewCardForm] = useState<{ name: string; balance: string } | null>(null);
+  const [newDigitalForm, setNewDigitalForm] = useState<{ name: string; balance: string } | null>(null);
 
-  // Persist state to localStorage
+  // Persist state to localStorage and Supabase
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    if (session?.user?.id) {
+      supabase.from("user_data").upsert({
+        user_id: session.user.id,
+        state: JSON.stringify(state),
+        updated_at: new Date().toISOString(),
+      });
+    }
   }, [state]);
 
-  // Fetch exchange rates when primary currency changes
+  // Fetch exchange rates when primary currency changes, and refresh every hour
   useEffect(() => {
-    fetch(`https://api.frankfurter.app/latest?from=${state.primaryCurrency}`)
-      .then((r) => r.json())
-      .then((data) =>
-        setState((prev) => ({ ...prev, exchangeRates: data.rates })),
-      )
-      .catch(() => {});
+    const fetchRates = () => {
+      fetch(`https://api.frankfurter.app/latest?from=${state.primaryCurrency}`)
+        .then((r) => r.json())
+        .then((data) =>
+          setState((prev) => ({ ...prev, exchangeRates: data.rates })),
+        )
+        .catch(() => {});
+    };
+    fetchRates();
+    const interval = setInterval(fetchRates, 3600000);
+    return () => clearInterval(interval);
   }, [state.primaryCurrency]);
 
   // Convert any currency to primary currency
@@ -144,33 +168,32 @@ export default function App() {
     const cashBalance = state.hasCash
       ? state.initialFunds.cash - getSpent("cash") + getInput("cash")
       : 0;
-    const digitalBalance = state.hasDigital
-      ? state.initialFunds.digital - getSpent("digital") + getInput("digital")
-      : 0;
-    const otherBalance = state.hasOther
-      ? state.initialFunds.other - getSpent("other") + getInput("other")
-      : 0;
 
     const cardBalances = state.cards.map((card) => ({
       card,
       balance: card.initialBalance - getSpent(card.id) + getInput(card.id),
     }));
 
+    const digitalBalance = state.digitalAccount.map((digital) => ({
+      digital,
+      balance:
+        digital.initialBalance - getSpent(digital.id) + getInput(digital.id),
+    }));
+
     const totalBalance =
       cashBalance +
-      digitalBalance +
-      otherBalance +
+      digitalBalance.reduce((sum, d) => sum + d.balance, 0) +
       cardBalances.reduce((sum, c) => sum + c.balance, 0);
 
     return {
       cashBalance,
       digitalBalance,
-      otherBalance,
       cardBalances,
       totalBalance,
     };
   }, [state]);
 
+  if (!authReady) return null;
   if (!session) return <LoginPage />;
 
   const handleLogin = (email: string) => {
@@ -181,12 +204,67 @@ export default function App() {
     supabase.auth.signOut();
   };
 
+  const addSettingsCard = () => {
+    if (state.cards.length >= 5) return;
+    setNewCardForm({ name: "", balance: "" });
+  };
+
+  const confirmAddCard = () => {
+    if (
+      !newCardForm ||
+      !newCardForm.name.trim() ||
+      !parseFloat(newCardForm.balance)
+    )
+      return;
+    setState((prev) => ({
+      ...prev,
+      cards: [
+        ...prev.cards,
+        {
+          id: crypto.randomUUID(),
+          name: newCardForm.name.trim(),
+          initialBalance: Math.max(0, parseFloat(newCardForm.balance) || 0),
+        },
+      ],
+    }));
+    setNewCardForm(null);
+  };
+
+  const addSettingsDigital = () => {
+    if (state.digitalAccount.length >= 5) return;
+    setNewDigitalForm({ name: "", balance: "" });
+  };
+
+  const confirmAddDigital = () => {
+    if (
+      !newDigitalForm ||
+      !newDigitalForm.name.trim() ||
+      !parseFloat(newDigitalForm.balance)
+    )
+      return;
+    setState((prev) => ({
+      ...prev,
+      digitalAccount: [
+        ...prev.digitalAccount,
+        {
+          id: crypto.randomUUID(),
+          name: newDigitalForm.name.trim(),
+          initialBalance: Math.max(0, parseFloat(newDigitalForm.balance) || 0),
+        },
+      ],
+    }));
+    setNewDigitalForm(null);
+  };
+
   const handleReset = () => {
     if (
       confirm("Are you sure you want to reset all data? This cannot be undone.")
     ) {
       setState(INITIAL_STATE);
       setCurrentScreen("Home");
+      if (session?.user?.id) {
+        supabase.from("user_data").delete().eq("user_id", session.user.id);
+      }
     }
   };
 
@@ -266,19 +344,29 @@ export default function App() {
           nextDueDate: next.toISOString(),
         };
       }),
-      variableExpenses: [
-        {
-          id: crypto.randomUUID(),
-          amount: prev.fixedExpenses.find((e) => e.id === id)!.amount,
-          currency: prev.fixedExpenses.find((e) => e.id === id)!.currency,
-          amountInPrimary: prev.fixedExpenses.find((e) => e.id === id)!.amount,
-          category: prev.fixedExpenses.find((e) => e.id === id)!.name,
-          note: "",
-          date: new Date().toISOString(),
-          method: prev.fixedExpenses.find((e) => e.id === id)!.method,
-        },
-        ...prev.variableExpenses,
-      ],
+      variableExpenses: (() => {
+        const e = prev.fixedExpenses.find((e) => e.id === id)!;
+        const rate = prev.exchangeRates[e.currency];
+        const amountInPrimary =
+          e.currency === prev.primaryCurrency
+            ? e.amount
+            : rate
+              ? e.amount / rate
+              : e.amount;
+        return [
+          {
+            id: crypto.randomUUID(),
+            amount: e.amount,
+            currency: e.currency,
+            amountInPrimary,
+            category: e.name,
+            note: "",
+            date: new Date().toISOString(),
+            method: e.method,
+          },
+          ...prev.variableExpenses,
+        ];
+      })(),
     }));
   };
 
@@ -286,8 +374,7 @@ export default function App() {
     primaryCurrency: Currency;
     cards: Card[];
     hasCash: boolean;
-    hasDigital: boolean;
-    hasOther: boolean;
+    digitalAccount: Digital[];
     initialFunds: InitialFunds;
   }) => {
     setState((prev) => ({ ...prev, ...setup, isSetupComplete: true }));
@@ -319,14 +406,6 @@ export default function App() {
 
             <h1 className="text-xl font-semibold tracking-tight">PennyWise</h1>
           </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setCurrentScreen("Settings")}
-              className="p-2 hover:bg-black/5 rounded-full transition-colors"
-            >
-              <SettingsIcon size={20} />
-            </button>
-          </div>
         </div>
       </header>
 
@@ -338,121 +417,56 @@ export default function App() {
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
-              className="space-y-8"
+              className="flex flex-col items-center justify-center min-h-[70vh] gap-6"
             >
-              {/* Wallet View */}
-              <div className="space-y-4">
-                <p className="text-xs font-semibold text-black/40 uppercase tracking-widest text-center">
-                  My Wallet
-                </p>
-                <WalletView
-                  cash={calculations.cashBalance}
-                  online={calculations.cardBalances[0]?.balance ?? 0}
-                  pocketMoney={calculations.cardBalances[1]?.balance ?? 0}
-                  total={calculations.totalBalance}
-                />
-              </div>
-
-              {/* Due Bills */}
-              {state.fixedExpenses.filter(
-                (e) => new Date(e.nextDueDate) <= new Date(),
-              ).length > 0 && (
-                <div className="space-y-3">
-                  <p className="text-xs font-semibold text-black/40 uppercase tracking-widest">
-                    Due Bills
-                  </p>
-                  {state.fixedExpenses
-                    .filter((e) => new Date(e.nextDueDate) <= new Date())
-                    .map((e) => (
-                      <div
-                        key={e.id}
-                        className="bg-white rounded-2xl p-4 border border-black/5 flex justify-between items-center shadow-sm"
-                      >
-                        <div>
-                          <p className="font-semibold text-sm">{e.name}</p>
-                          <p className="text-xs text-black/40">
-                            ${e.amount.toLocaleString()} · {e.method}
-                          </p>
-                        </div>
-                        <button
-                          onClick={() => payFixedExpense(e.id)}
-                          className="px-4 py-2 rounded-xl text-xs font-bold text-white bg-red-500 hover:bg-red-600 transition-colors"
+              <WalletView
+                cash={calculations.cashBalance}
+                digitalBalance={calculations.digitalBalance}
+                cardBalances={calculations.cardBalances}
+                total={calculations.totalBalance}
+              />
+              {(() => {
+                const today = new Date();
+                today.setHours(0, 0, 0, 0);
+                const due = state.fixedExpenses.filter((e) => {
+                  const d = new Date(e.nextDueDate);
+                  d.setHours(0, 0, 0, 0);
+                  return d <= today;
+                });
+                if (due.length === 0) return null;
+                return (
+                  <div className="w-full">
+                    <div className="flex items-center gap-2 mb-2 px-1">
+                      <div className="w-2 h-2 rounded-full bg-red-400 animate-pulse" />
+                      <p className="text-xs font-bold uppercase tracking-wider text-red-400">
+                        Due Bills ({due.length})
+                      </p>
+                    </div>
+                    <div
+                      className="flex gap-3 overflow-x-auto pb-2"
+                      style={{ scrollbarWidth: "none" }}
+                    >
+                      {due.map((e) => (
+                        <div
+                          key={e.id}
+                          className="flex-shrink-0 w-52 bg-red-50 border border-red-100 rounded-2xl px-4 py-3 flex flex-col gap-2"
                         >
-                          Pay
-                        </button>
-                      </div>
-                    ))}
-                </div>
-              )}
-
-              {/* Recent Activity */}
-              <div className="space-y-4">
-                <div className="flex justify-between items-end">
-                  <h2 className="text-sm font-semibold uppercase tracking-wider text-black/40">
-                    Recent Activity
-                  </h2>
-                  <button
-                    onClick={() => setCurrentScreen("History")}
-                    className="text-xs font-medium text-black/60 hover:text-black"
-                  >
-                    View All
-                  </button>
-                </div>
-                <div className="space-y-2">
-                  {[
-                    ...state.variableExpenses.map((e) => ({
-                      ...e,
-                      kind: "expense" as const,
-                    })),
-                    ...state.inputExpenses.map((e) => ({
-                      ...e,
-                      kind: "income" as const,
-                    })),
-                  ]
-                    .sort(
-                      (a, b) =>
-                        new Date(b.date).getTime() - new Date(a.date).getTime(),
-                    )
-                    .slice(0, 5)
-                    .map((entry) => (
-                      <div
-                        key={entry.id}
-                        className="bg-white rounded-2xl p-4 border border-black/5 flex justify-between items-center"
-                      >
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-full bg-[#F5F5F5] flex items-center justify-center text-lg">
-                            {getCategoryEmoji(entry.category)}
-                          </div>
-                          <div>
-                            <p className="text-sm font-medium">
-                              {entry.category}
-                            </p>
-                            <p className="text-[10px] text-black/40">
-                              {new Date(entry.date).toLocaleDateString()}
-                            </p>
-                          </div>
-                        </div>
-                        <div className="text-right">
-                          <p
-                            className={`text-sm font-semibold ${entry.kind === "income" ? "text-green-500" : ""}`}
+                          <p className="text-sm font-semibold text-red-600">{e.name}</p>
+                          <p className="text-xs text-red-400">
+                            {CURRENCY_SYMBOLS[e.currency]}{e.amount.toLocaleString()} · {new Date(e.nextDueDate).toLocaleDateString()}
+                          </p>
+                          <button
+                            onClick={() => payFixedExpense(e.id)}
+                            className="text-xs font-bold text-white bg-red-400 hover:bg-red-500 px-3 py-1.5 rounded-xl transition-colors"
                           >
-                            {entry.kind === "income" ? "+" : "-"}$
-                            {entry.amount.toLocaleString()}
-                          </p>
-                          <p className="text-[10px] text-black/40 uppercase tracking-tighter">
-                            {entry.method}
-                          </p>
+                            Pay
+                          </button>
                         </div>
-                      </div>
-                    ))}
-                  {state.variableExpenses.length === 0 &&
-                    state.inputExpenses.length === 0 && (
-                      <div className="py-12 text-center text-black/30">
-                        <p className="text-sm">No transactions logged yet.</p>
-                      </div>
-                    )}
-                </div>
-              </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
             </motion.div>
           )}
 
@@ -468,8 +482,7 @@ export default function App() {
                 primaryCurrency={state.primaryCurrency}
                 exchangeRates={state.exchangeRates}
                 hasCash={state.hasCash}
-                hasDigital={state.hasDigital}
-                hasOther={state.hasOther}
+                digitalAccount={state.digitalAccount}
                 cards={state.cards}
                 onSubmit={addOutputExpense}
                 onSubmitIncome={addInputExpense}
@@ -489,8 +502,7 @@ export default function App() {
                 primaryCurrency={state.primaryCurrency}
                 exchangeRates={state.exchangeRates}
                 hasCash={state.hasCash}
-                hasDigital={state.hasDigital}
-                hasOther={state.hasOther}
+                digitalAccount={state.digitalAccount}
                 cards={state.cards}
                 onSubmit={addInputExpense}
                 onCancel={() => setCurrentScreen("Home")}
@@ -532,7 +544,7 @@ export default function App() {
                     </div>
                     <div className="flex items-center gap-4">
                       <p className="text-sm font-semibold">
-                        ${expense.amount.toLocaleString()}
+                        {CURRENCY_SYMBOLS[expense.currency]}{expense.amount.toLocaleString()}
                       </p>
                       <button
                         onClick={() => deleteFixedExpense(expense.id)}
@@ -563,6 +575,9 @@ export default function App() {
                         Add Fixed Expense
                       </h3>
                       <FixedExpenseForm
+                        hasCash={state.hasCash}
+                        cards={state.cards}
+                        digitalAccount={state.digitalAccount}
                         onSubmit={addFixedExpense}
                         onCancel={() => setIsAddingFixed(false)}
                       />
@@ -650,7 +665,7 @@ export default function App() {
                           <p
                             className={`text-sm font-semibold ${entry.kind === "income" ? "text-green-500" : "text-red-400"}`}
                           >
-                            {entry.kind === "income" ? "+" : "-"}$
+                            {entry.kind === "income" ? "+" : "-"}{CURRENCY_SYMBOLS[entry.currency as Currency]}
                             {entry.amount.toLocaleString()}
                           </p>
                           <p className="text-[10px] text-black/40 uppercase tracking-tighter">
@@ -724,7 +739,7 @@ export default function App() {
                     <div className="flex justify-between items-center">
                       <span className="text-sm">Logged in as</span>
                       <span className="font-semibold text-xs">
-                        {state.userEmail}
+                        {session?.user?.email ?? state.userEmail}
                       </span>
                     </div>
                     <button
@@ -739,50 +754,145 @@ export default function App() {
 
                 <div className="space-y-4">
                   <h3 className="text-xs font-semibold uppercase tracking-wider text-black/40">
-                    Initial Funds
+                    Cards
                   </h3>
-                  <div className="bg-white rounded-2xl p-6 border border-black/5 space-y-4">
-                    {state.hasCash && (
-                      <div className="flex justify-between items-center">
-                        <span className="text-sm">Cash</span>
-                        <span className="font-semibold">
-                          {CURRENCY_SYMBOLS[state.primaryCurrency]}
-                          {state.initialFunds.cash.toLocaleString()}
-                        </span>
-                      </div>
-                    )}
-                    {state.hasDigital && (
-                      <div className="flex justify-between items-center">
-                        <span className="text-sm">Digital</span>
-                        <span className="font-semibold">
-                          {CURRENCY_SYMBOLS[state.primaryCurrency]}
-                          {state.initialFunds.digital.toLocaleString()}
-                        </span>
-                      </div>
-                    )}
+                  <div className="bg-white rounded-2xl p-4 border border-black/5 space-y-3">
                     {state.cards.map((card) => (
                       <div
                         key={card.id}
                         className="flex justify-between items-center"
                       >
-                        <span className="text-sm">{card.name}</span>
-                        <span className="font-semibold">
+                        <span className="text-sm font-medium">{card.name}</span>
+                        <span className="text-sm text-black/40">
                           {CURRENCY_SYMBOLS[state.primaryCurrency]}
                           {card.initialBalance.toLocaleString()}
                         </span>
                       </div>
                     ))}
-                    <button
-                      onClick={() =>
-                        setState((prev) => ({
-                          ...prev,
-                          isSetupComplete: false,
-                        }))
-                      }
-                      className="w-full py-2 text-xs font-medium text-black/60 hover:text-black border border-black/5 rounded-xl transition-colors"
-                    >
-                      Edit Initial Funds
-                    </button>
+                    {newCardForm && (
+                      <div className="space-y-2 pt-1">
+                        <input
+                          type="text"
+                          value={newCardForm.name}
+                          onChange={(e) =>
+                            setNewCardForm({
+                              ...newCardForm,
+                              name: e.target.value,
+                            })
+                          }
+                          placeholder="Card name (e.g. RBC, TD)"
+                          className="w-full bg-[#F5F5F5] rounded-xl py-2 px-3 text-sm outline-none"
+                          autoFocus
+                        />
+                        <input
+                          type="number"
+                          min="0"
+                          value={newCardForm.balance}
+                          onChange={(e) =>
+                            setNewCardForm({
+                              ...newCardForm,
+                              balance: e.target.value,
+                            })
+                          }
+                          placeholder="Initial balance"
+                          className="w-full bg-[#F5F5F5] rounded-xl py-2 px-3 text-sm outline-none"
+                        />
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => setNewCardForm(null)}
+                            className="flex-1 py-2 rounded-xl border border-black/10 text-xs text-black/40"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            onClick={confirmAddCard}
+                            className="flex-1 py-2 rounded-xl bg-slate-400 text-white text-xs font-semibold"
+                          >
+                            Add
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    {!newCardForm && state.cards.length < 5 && (
+                      <button
+                        onClick={addSettingsCard}
+                        className="w-full py-2 rounded-xl border-2 border-dashed border-black/10 text-xs text-black/40 hover:border-slate-300 transition-colors"
+                      >
+                        + Add card
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <h3 className="text-xs font-semibold uppercase tracking-wider text-black/40">
+                    Digital Accounts
+                  </h3>
+                  <div className="bg-white rounded-2xl p-4 border border-black/5 space-y-3">
+                    {state.digitalAccount.map((d) => (
+                      <div
+                        key={d.id}
+                        className="flex justify-between items-center"
+                      >
+                        <span className="text-sm font-medium">{d.name}</span>
+                        <span className="text-sm text-black/40">
+                          {CURRENCY_SYMBOLS[state.primaryCurrency]}
+                          {d.initialBalance.toLocaleString()}
+                        </span>
+                      </div>
+                    ))}
+                    {newDigitalForm && (
+                      <div className="space-y-2 pt-1">
+                        <input
+                          type="text"
+                          value={newDigitalForm.name}
+                          onChange={(e) =>
+                            setNewDigitalForm({
+                              ...newDigitalForm,
+                              name: e.target.value,
+                            })
+                          }
+                          placeholder="Account name (e.g. PayPal, Wise)"
+                          className="w-full bg-[#F5F5F5] rounded-xl py-2 px-3 text-sm outline-none"
+                          autoFocus
+                        />
+                        <input
+                          type="number"
+                          min="0"
+                          value={newDigitalForm.balance}
+                          onChange={(e) =>
+                            setNewDigitalForm({
+                              ...newDigitalForm,
+                              balance: e.target.value,
+                            })
+                          }
+                          placeholder="Initial balance"
+                          className="w-full bg-[#F5F5F5] rounded-xl py-2 px-3 text-sm outline-none"
+                        />
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => setNewDigitalForm(null)}
+                            className="flex-1 py-2 rounded-xl border border-black/10 text-xs text-black/40"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            onClick={confirmAddDigital}
+                            className="flex-1 py-2 rounded-xl bg-slate-400 text-white text-xs font-semibold"
+                          >
+                            Add
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    {!newDigitalForm && state.digitalAccount.length < 5 && (
+                      <button
+                        onClick={addSettingsDigital}
+                        className="w-full py-2 rounded-xl border-2 border-dashed border-black/10 text-xs text-black/40 hover:border-slate-300 transition-colors"
+                      >
+                        + Add digital account
+                      </button>
+                    )}
                   </div>
                 </div>
 
@@ -871,8 +981,7 @@ function SetupWizard({
     primaryCurrency: Currency;
     cards: Card[];
     hasCash: boolean;
-    hasDigital: boolean;
-    hasOther: boolean;
+    digitalAccount: Digital[];
     initialFunds: InitialFunds;
   }) => void;
 }) {
@@ -881,20 +990,29 @@ function SetupWizard({
   const [hasCash, setHasCash] = useState(false);
   const [hasCard, setHasCard] = useState(false);
   const [hasDigital, setHasDigital] = useState(false);
-  const [hasOther, setHasOther] = useState(false);
+
   const [cards, setCards] = useState<Card[]>([
     { id: crypto.randomUUID(), name: "RBC", initialBalance: 0 },
     { id: crypto.randomUUID(), name: "Visa", initialBalance: 0 },
   ]);
   const [cashBalance, setCashBalance] = useState("");
-  const [digitalBalance, setDigitalBalance] = useState("");
-  const [otherBalance, setOtherBalance] = useState("");
+  const [digitalAccount, setDigitalAccount] = useState<Digital[]>([
+    { id: crypto.randomUUID(), name: "PayPal", initialBalance: 0 },
+  ]);
 
   const sym = CURRENCY_SYMBOLS[currency];
 
   const addCard = () => {
     if (cards.length >= 5) return;
     setCards((prev) => [
+      ...prev,
+      { id: crypto.randomUUID(), name: "", initialBalance: 0 },
+    ]);
+  };
+
+  const addDigital = () => {
+    if (digitalAccount.length >= 5) return;
+    setDigitalAccount((prev) => [
       ...prev,
       { id: crypto.randomUUID(), name: "", initialBalance: 0 },
     ]);
@@ -910,22 +1028,29 @@ function SetupWizard({
     );
   };
 
+  const updateDigital = (
+    id: string,
+    field: keyof Digital,
+    value: string | number,
+  ) => {
+    setDigitalAccount((prev) =>
+      prev.map((d) => (d.id === id ? { ...d, [field]: value } : d)),
+    );
+  };
+
   const handleFinish = () => {
     onComplete({
       primaryCurrency: currency,
       cards: hasCard ? cards.filter((c) => c.name.trim()) : [],
       hasCash,
-      hasDigital,
-      hasOther,
+      digitalAccount: hasDigital ? digitalAccount.filter((d) => d.name.trim()) : [],
       initialFunds: {
         cash: parseFloat(cashBalance) || 0,
-        digital: parseFloat(digitalBalance) || 0,
-        other: parseFloat(otherBalance) || 0,
       },
     });
   };
 
-  const STEPS = ["Currency", "Payment Methods", "Cards", "Balances"];
+  const STEPS = ["Currency", "Payment Methods", "Cards", "Digital", "Balances"];
 
   return (
     <div className="min-h-screen bg-white flex items-center justify-center p-6">
@@ -1012,15 +1137,9 @@ function SetupWizard({
                 },
                 {
                   label: "Digital",
-                  desc: "E-transfers, PayPal, etc.",
+                  desc: "Paypal",
                   state: hasDigital,
                   set: setHasDigital,
-                },
-                {
-                  label: "Other",
-                  desc: "Anything else",
-                  state: hasOther,
-                  set: setHasOther,
                 },
               ].map(({ label, desc, state: s, set }) => (
                 <button
@@ -1048,7 +1167,7 @@ function SetupWizard({
                 ← Back
               </button>
               <button
-                onClick={() => setStep(hasCard ? 3 : 4)}
+                onClick={() => setStep(hasCard ? 3 : hasDigital ? 4 : 5)}
                 className="flex-1 bg-slate-400 text-white py-4 rounded-2xl font-semibold hover:bg-slate-500 transition-colors"
               >
                 Next →
@@ -1092,12 +1211,13 @@ function SetupWizard({
                     </span>
                     <input
                       type="number"
+                      min="0"
                       value={card.initialBalance || ""}
                       onChange={(e) =>
                         updateCard(
                           card.id,
                           "initialBalance",
-                          parseFloat(e.target.value) || 0,
+                          Math.max(0, parseFloat(e.target.value) || 0),
                         )
                       }
                       placeholder="0.00"
@@ -1115,6 +1235,11 @@ function SetupWizard({
                 </button>
               )}
             </div>
+            {cards.some((c) => !c.name.trim() || c.initialBalance <= 0) && (
+              <p className="text-red-400 text-xs font-semibold">
+                Please enter a name and initial balance for each card.
+              </p>
+            )}
             <div className="flex gap-3">
               <button
                 onClick={() => setStep(2)}
@@ -1123,8 +1248,14 @@ function SetupWizard({
                 ← Back
               </button>
               <button
-                onClick={() => setStep(4)}
-                className="flex-1 bg-slate-400 text-white py-4 rounded-2xl font-semibold hover:bg-slate-500 transition-colors"
+                onClick={() => {
+                  if (
+                    cards.some((c) => !c.name.trim() || c.initialBalance <= 0)
+                  )
+                    return;
+                  setStep(hasDigital ? 4 : 5);
+                }}
+                className={`flex-1 py-4 rounded-2xl font-semibold transition-colors ${cards.some((c) => !c.name.trim() || c.initialBalance <= 0) ? "bg-slate-200 text-slate-400 cursor-not-allowed" : "bg-slate-400 text-white hover:bg-slate-500"}`}
               >
                 Next →
               </button>
@@ -1132,15 +1263,103 @@ function SetupWizard({
           </div>
         )}
 
-        {/* Step 4: Balances */}
+        {/* Step 4: Digital */}
         {step === 4 && (
           <div className="space-y-6">
             <div>
               <h1 className="text-2xl font-bold tracking-tight">
-                Initial balances
+                Set up your digital payments
               </h1>
               <p className="text-black/40 text-sm mt-1">
-                How much do you have right now?
+                Up to 5 accounts. PayPal, e-transfers, etc.
+              </p>
+            </div>
+            <div className="space-y-3">
+              {digitalAccount.map((d, i) => (
+                <div
+                  key={d.id}
+                  className="bg-[#F5F5F5] rounded-2xl p-4 space-y-3"
+                >
+                  <div className="text-xs font-bold text-black/40 uppercase tracking-wider">
+                    Digital {i + 1}
+                  </div>
+                  <input
+                    type="text"
+                    value={d.name}
+                    onChange={(e) =>
+                      updateDigital(d.id, "name", e.target.value)
+                    }
+                    placeholder="Account name (e.g. PayPal, Wise)"
+                    className="w-full bg-white rounded-xl py-2 px-3 text-sm outline-none border border-black/5"
+                  />
+                  <div className="flex items-center bg-white rounded-xl border border-black/5 overflow-hidden">
+                    <span className="pl-3 pr-1 text-black/30 text-sm whitespace-nowrap">
+                      {sym}
+                    </span>
+                    <input
+                      type="number"
+                      value={d.initialBalance || ""}
+                      onChange={(e) =>
+                        updateDigital(
+                          d.id,
+                          "initialBalance",
+                          Math.max(0, parseFloat(e.target.value) || 0),
+                        )
+                      }
+                      placeholder="0.00"
+                      className="flex-1 bg-transparent py-2 pr-3 text-sm outline-none"
+                    />
+                  </div>
+                </div>
+              ))}
+              {digitalAccount.length < 5 && (
+                <button
+                  onClick={addDigital}
+                  className="w-full py-3 rounded-2xl border-2 border-dashed border-black/10 text-sm text-black/40 hover:border-slate-300 transition-colors"
+                >
+                  + Add another account
+                </button>
+              )}
+            </div>
+            {digitalAccount.some(
+              (d) => !d.name.trim() || d.initialBalance <= 0,
+            ) && (
+              <p className="text-red-400 text-xs font-semibold">
+                Please enter a name and initial balance for each account.
+              </p>
+            )}
+            <div className="flex gap-3">
+              <button
+                onClick={() => setStep(hasCard ? 3 : 2)}
+                className="flex-1 py-4 rounded-2xl border border-black/10 text-sm font-medium"
+              >
+                ← Back
+              </button>
+              <button
+                onClick={() => {
+                  if (
+                    digitalAccount.some(
+                      (d) => !d.name.trim() || d.initialBalance <= 0,
+                    )
+                  )
+                    return;
+                  setStep(5);
+                }}
+                className={`flex-1 py-4 rounded-2xl font-semibold transition-colors ${digitalAccount.some((d) => !d.name.trim() || d.initialBalance <= 0) ? "bg-slate-200 text-slate-400 cursor-not-allowed" : "bg-slate-400 text-white hover:bg-slate-500"}`}
+              >
+                Next →
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Step 5: Balances */}
+        {step === 5 && (
+          <div className="space-y-6">
+            <div>
+              <h1 className="text-2xl font-bold tracking-tight">Cash</h1>
+              <p className="text-black/40 text-sm mt-1">
+                How much cash do you have right now?
               </p>
             </div>
             <div className="space-y-3">
@@ -1155,66 +1374,37 @@ function SetupWizard({
                     </span>
                     <input
                       type="number"
+                      min="0"
                       value={cashBalance}
-                      onChange={(e) => setCashBalance(e.target.value)}
+                      onChange={(e) =>
+                        setCashBalance(
+                          Math.max(
+                            0,
+                            parseFloat(e.target.value) || 0,
+                          ).toString(),
+                        )
+                      }
                       placeholder="0.00"
                       className="w-full bg-[#F5F5F5] rounded-2xl py-4 pl-14 pr-4 outline-none focus:ring-2 focus:ring-slate-400"
                     />
                   </div>
                 </div>
               )}
-              {hasDigital && (
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-black/40 uppercase tracking-wider">
-                    Digital
-                  </label>
-                  <div className="relative">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-black/30 text-sm pointer-events-none">
-                      {sym}
-                    </span>
-                    <input
-                      type="number"
-                      value={digitalBalance}
-                      onChange={(e) => setDigitalBalance(e.target.value)}
-                      placeholder="0.00"
-                      className="w-full bg-[#F5F5F5] rounded-2xl py-4 pl-14 pr-4 outline-none focus:ring-2 focus:ring-slate-400"
-                    />
-                  </div>
-                </div>
-              )}
-              {hasOther && (
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-black/40 uppercase tracking-wider">
-                    Other
-                  </label>
-                  <div className="relative">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-black/30 text-sm pointer-events-none">
-                      {sym}
-                    </span>
-                    <input
-                      type="number"
-                      value={otherBalance}
-                      onChange={(e) => setOtherBalance(e.target.value)}
-                      placeholder="0.00"
-                      className="w-full bg-[#F5F5F5] rounded-2xl py-4 pl-14 pr-4 outline-none focus:ring-2 focus:ring-slate-400"
-                    />
-                  </div>
-                </div>
-              )}
-            </div>
-            <div className="flex gap-3">
-              <button
-                onClick={() => setStep(hasCard ? 3 : 2)}
-                className="flex-1 py-4 rounded-2xl border border-black/10 text-sm font-medium"
-              >
-                ← Back
-              </button>
-              <button
-                onClick={handleFinish}
-                className="flex-1 bg-slate-400 text-white py-4 rounded-2xl font-semibold hover:bg-slate-500 transition-colors"
-              >
-                Start Tracking
-              </button>
+
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setStep(4)}
+                  className="flex-1 py-4 rounded-2xl border border-black/10 text-sm font-medium"
+                >
+                  ← Back
+                </button>
+                <button
+                  onClick={handleFinish}
+                  className="flex-1 bg-slate-400 text-white py-4 rounded-2xl font-semibold hover:bg-slate-500 transition-colors"
+                >
+                  Start Tracking
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -1275,330 +1465,167 @@ function LoginScreen({ onLogin }: { onLogin: (email: string) => void }) {
 
 function WalletView({
   cash,
-  online,
-  pocketMoney,
+  digitalBalance,
+  cardBalances,
   total,
 }: {
   cash: number;
-  online: number;
-  pocketMoney: number;
+  digitalBalance: { digital: Digital; balance: number }[];
+  cardBalances: { card: { id: string; name: string }; balance: number }[];
   total: number;
 }) {
-  const [selected, setSelected] = useState<
-    "cash" | "rbc" | "visa" | "online" | "pocket" | null
-  >(null);
+  const [isOpen, setIsOpen] = useState(false);
+
+  const leatherBg =
+    "linear-gradient(145deg, #7A4422 0%, #4A2C0A 25%, #5C3415 55%, #3A2008 80%, #4A2C0A 100%)";
+  const innerBg =
+    "linear-gradient(160deg, #1E1206 0%, #150D04 50%, #1A1005 100%)";
 
   return (
-    <div className="space-y-8">
-      <div className="relative w-full aspect-[4/3] max-w-sm mx-auto perspective-1000 isolate">
-        {/* Wallet Base - Leather Texture */}
-        <div className="absolute inset-0 bg-[#4A3728] rounded-[32px] shadow-2xl overflow-hidden border-b-8 border-r-8 border-[#2D1B0F] flex">
-          {/* Left Side of Bifold */}
-          <div className="w-1/2 h-full border-r border-black/20 relative bg-gradient-to-br from-[#5A4738] to-[#4A3728]">
-            {/* Pockets */}
-            <div className="absolute top-4 left-4 right-4 h-16 bg-[#3D2B1F] rounded-t-xl border-t border-white/10 shadow-inner"></div>
-            <div className="absolute top-10 left-4 right-4 h-16 bg-[#3D2B1F] rounded-t-xl border-t border-white/10 shadow-inner"></div>
-            <div className="absolute top-16 left-4 right-4 h-16 bg-[#3D2B1F] rounded-t-xl border-t border-white/10 shadow-inner"></div>
+    <div className="flex flex-col items-center select-none">
+      {/* Perspective wrapper */}
+      <div style={{ perspective: "1200px" }}>
+        <div
+          className="relative cursor-pointer"
+          style={{ width: 340, height: 230 }}
+          onClick={() => setIsOpen((o) => !o)}
+        >
+          {/* DROP SHADOW */}
+          <div className="absolute -bottom-4 left-1/2 -translate-x-1/2 w-full h-8 rounded-full bg-black/30 blur-xl pointer-events-none" />
 
-            {/* Folded Cash sticking out */}
-            <AnimatePresence>
-              <motion.div
-                initial={{ y: 0 }}
-                animate={{ y: 0 }}
-                onClick={() => setSelected(selected === "cash" ? null : "cash")}
-                className={`absolute top-10 left-5.5 right-1 cursor-pointer ${selected === "cash" ? "z-50" : "z-1"}`}
-              >
-                {/* CAD $100 Bill - Realistic */}
-                <div
-                  className={`relative w-full h-32 rounded-sm overflow-hidden transition-all duration-300 ${selected === "cash" ? "shadow-[0_0_18px_rgba(180,140,80,0.8)]" : "shadow-lg"}`}
-                  style={{
-                    background:
-                      "linear-gradient(135deg, #C49A6C 0%, #B8864E 40%, #C49A6C 60%, #A87840 100%)",
-                  }}
-                >
-                  {/* Guilloche line pattern */}
-                  <div className="absolute inset-0 opacity-20 pointer-events-none">
-                    <svg width="100%" height="100%">
-                      {[
-                        4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56,
-                        60, 64, 68, 72, 76, 80, 84, 88, 92, 96, 100, 104, 108,
-                        112, 116, 120, 124,
-                      ].map((y) => (
-                        <path
-                          key={y}
-                          d={`M0 ${y} Q 20 ${y - 3}, 40 ${y} T 80 ${y} T 160 ${y} T 240 ${y}`}
-                          fill="none"
-                          stroke="#3D2000"
-                          strokeWidth="0.5"
-                        />
-                      ))}
-                    </svg>
-                  </div>
-
-                  {/* Top row */}
-                  <div className="absolute top-2 left-2 right-2 flex justify-between items-start z-10">
-                    <span className="text-[9px] font-black text-[#3D2000]/70">
-                      100
-                    </span>
-                    <div className="text-[5px] font-bold text-[#3D2000]/60 text-center leading-tight">
-                      BANK OF CANADA
-                      <br />
-                      BANQUE DU CANADA
-                    </div>
-                    <span className="text-[9px] font-black text-[#3D2000]/70">
-                      100
-                    </span>
-                  </div>
-
-                  {/* Portrait oval */}
-                  <div className="absolute left-3 top-1/2 -translate-y-1/2 w-10 h-12 rounded-full bg-[#8B5E2A]/30 border border-[#5D3A1A]/30 flex items-end justify-center overflow-hidden z-10">
-                    <div className="w-7 h-8 rounded-t-full bg-[#5D3A1A]/40 mb-0"></div>
-                  </div>
-
-                  {/* Holographic security strip */}
-                  <div
-                    className="absolute right-5 top-0 bottom-0 w-3 z-10"
-                    style={{
-                      background:
-                        "linear-gradient(180deg, rgba(200,180,120,0.9) 0%, rgba(160,210,190,0.9) 25%, rgba(210,190,140,0.9) 50%, rgba(150,200,170,0.9) 75%, rgba(200,180,120,0.9) 100%)",
-                    }}
-                  />
-
-                  {/* Large watermark 100 */}
-                  <div className="absolute right-10 top-1/2 -translate-y-1/2 text-[36px] font-black text-[#5D3A1A]/10 select-none z-10">
-                    100
-                  </div>
-
-                  {/* Balance */}
-                  <div className="absolute inset-0 flex flex-col items-center justify-center z-20">
-                    <p className="text-lg font-black tracking-tighter text-[#2D1500] drop-shadow-sm">
-                      ${cash.toLocaleString()}
-                    </p>
-                    <p className="text-[6px] font-bold text-[#3D2000]/70 uppercase tracking-widest">
-                      Cash
-                    </p>
-                  </div>
-
-                  {/* Bottom text */}
-                  <div className="absolute bottom-2 left-2 right-2 flex justify-between z-10">
-                    <span className="text-[5px] font-bold text-[#3D2000]/50">
-                      ONE HUNDRED DOLLARS
-                    </span>
-                    <span className="text-[5px] font-bold text-[#3D2000]/50">
-                      CENT DOLLARS
-                    </span>
-                  </div>
-                </div>
-              </motion.div>
-            </AnimatePresence>
-
-            {/* Pocket Money - Small Coin Pocket */}
-            <div className="absolute bottom-6 left-4 right-4 h-20 bg-[#3D2B1F] rounded-xl border-t border-white/10 shadow-inner overflow-visible">
-              <AnimatePresence>
-                <motion.div
-                  initial={{ y: 0 }}
-                  animate={{ y: 0 }}
-                  onClick={() =>
-                    setSelected(selected === "pocket" ? null : "pocket")
-                  }
-                  className={`absolute inset-x-2 top-2 cursor-pointer ${selected === "pocket" ? "z-50" : "z-10"}`}
-                >
-                  <div
-                    className={`w-full transition-all duration-300 ${selected === "pocket" ? "shadow-[0_0_12px_rgba(255,240,200,0.7)]" : "shadow-md"}`}
-                    style={{ transform: "rotate(-1.5deg)" }}
-                  >
-                    {/* Torn top edge */}
-                    <div
-                      className="w-full h-2 bg-[#F5EDD8]"
-                      style={{
-                        clipPath:
-                          "polygon(0% 100%, 2% 20%, 5% 90%, 8% 10%, 11% 80%, 14% 5%, 18% 75%, 22% 15%, 26% 85%, 30% 0%, 34% 90%, 38% 10%, 42% 80%, 46% 20%, 50% 95%, 54% 5%, 58% 85%, 62% 15%, 66% 90%, 70% 0%, 74% 80%, 78% 20%, 82% 95%, 86% 5%, 90% 75%, 94% 20%, 97% 90%, 100% 10%, 100% 100%)",
-                      }}
-                    />
-                    <div
-                      className="bg-[#F5EDD8] px-2 pb-2 rounded-b-sm"
-                      style={{ fontFamily: "monospace" }}
-                    >
-                      <div className="text-center text-[7px] font-bold text-black/70">
-                        METRO INC.
-                      </div>
-                      <div className="text-center text-[5px] text-black/40 mb-1">
-                        1234 Maple Ave · (416) 555-0192
-                      </div>
-                      <div className="border-t border-dashed border-black/20 my-1" />
-                      <div className="flex justify-between text-[5px] text-black/60">
-                        <span>Whole Milk 2L</span>
-                        <span>$3.99</span>
-                      </div>
-                      <div className="flex justify-between text-[5px] text-black/60">
-                        <span>Sourdough</span>
-                        <span>$4.49</span>
-                      </div>
-                      <div className="flex justify-between text-[5px] text-black/60">
-                        <span>Free Range Eggs</span>
-                        <span>$5.79</span>
-                      </div>
-                      <div className="border-t border-dashed border-black/20 my-1" />
-                      <div className="flex justify-between text-[6px] font-bold text-black/80">
-                        <span>TOTAL</span>
-                        <span>${pocketMoney.toLocaleString()}</span>
-                      </div>
-                      <div className="text-center text-[4px] text-black/30 mt-1">
-                        THANK YOU FOR SHOPPING!
-                      </div>
-                    </div>
-                  </div>
-                </motion.div>
-              </AnimatePresence>
-              {/* Pocket Flap */}
-              <div className="absolute inset-x-0 top-0 h-4 bg-[#4A3728] rounded-t-xl border-b border-black/20 z-20"></div>
+          {/* ── INTERIOR — always behind the cover ── */}
+          <div className="absolute inset-0 rounded-2xl overflow-hidden flex">
+            {/* Left half — Cash */}
+            <div
+              className="w-1/2 h-full flex flex-col justify-between p-4"
+              style={{ background: innerBg }}
+            >
+              <p className="text-[11px] font-black uppercase tracking-normal text-[#C8A96E]/45">
+                Total Available
+              </p>
+              <div>
+                <p className="mt-[-10px] text-2xl font-black text-white/90 tracking-normal">
+                  ${total.toLocaleString()}
+                </p>
+              </div>
+              <div className="mb-10 border-t border-white/[0.07] pt-3">
+                <p className="text-[7px] font-black uppercase tracking-normal text-[#C8A96E]/45">
+                  Cash
+                </p>
+                <p className="mt-4 text-[15px] font-black text-white/75">
+                  ${cash.toLocaleString()}
+                </p>
+              </div>
             </div>
-          </div>
 
-          {/* Right Side of Bifold */}
-          <div className="w-1/2 h-full relative bg-gradient-to-bl from-[#5A4738] to-[#4A3728]">
-            {/* Card Pockets */}
-            <div className="absolute top-4 left-4 right-4 h-24 bg-[#3D2B1F] rounded-t-xl border-t border-white/10 shadow-inner"></div>
-            <div className="absolute top-12 left-4 right-4 h-24 bg-[#3D2B1F] rounded-t-xl border-t border-white/10 shadow-inner"></div>
+            {/* Center fold crease */}
+            <div className="w-px self-stretch bg-black/40" />
 
-            {/* Visa Card */}
-            <AnimatePresence>
-              <motion.div
-                initial={{ y: 0 }}
-                animate={{ y: 0 }}
-                onClick={() => setSelected(selected === "visa" ? null : "visa")}
-                className={`absolute top-16 left-3 right-3 cursor-pointer ${selected === "visa" ? "z-50" : "z-10"}`}
+            {/* Right half — Cards & Digital */}
+            <div
+              className="w-1/2 h-full flex flex-col p-4"
+              style={{ background: innerBg }}
+            >
+              <div
+                style={{ flex: 1 }}
+                className="flex flex-col justify-start overflow-hidden"
               >
+                <p className="text-[7px] font-black uppercase tracking-normal text-[#C8A96E]/45 mb-3 shrink-0">
+                  Cards
+                </p>
                 <div
-                  className={`w-full h-24 bg-white rounded-lg border border-black/5 p-3 flex flex-col justify-between relative overflow-hidden transition-all duration-300 ${selected === "visa" ? "shadow-[0_0_16px_rgba(255,255,255,0.5)]" : "shadow-xl"}`}
+                  className="space-y-1 overflow-y-auto"
+                  style={{ scrollbarWidth: "none" }}
                 >
-                  <div className="flex justify-between items-start">
-                    <span className="text-[10px] font-black italic text-blue-800">
-                      VISA
-                    </span>
-                    <div className="w-6 h-5 bg-yellow-200/50 rounded-sm border border-black/10"></div>
-                  </div>
-                  <div>
-                    <p className="text-[6px] font-mono text-black/40">
-                      **** **** **** 8888
+                  {cardBalances.length === 0 ? (
+                    <p className="text-[9px] text-white/20 italic">
+                      No cards added
                     </p>
-                    <p className="text-xs font-bold text-black/80">
-                      ${online.toLocaleString()}
-                    </p>
-                  </div>
-                  <div className="absolute bottom-2 right-2 flex -space-x-1">
-                    <div className="w-4 h-4 rounded-full bg-red-500/80"></div>
-                    <div className="w-4 h-4 rounded-full bg-yellow-500/80"></div>
-                  </div>
-                </div>
-              </motion.div>
-            </AnimatePresence>
-
-            {/* RBC Card */}
-            <AnimatePresence>
-              <motion.div
-                initial={{ y: 0 }}
-                animate={{ y: 0 }}
-                onClick={() => setSelected(selected === "rbc" ? null : "rbc")}
-                className={`absolute top-8 left-3 right-3 cursor-pointer ${selected === "rbc" ? "z-50" : "z-20"}`}
-              >
-                <div
-                  className={`w-full h-24 bg-gradient-to-br from-[#005DAA] via-[#003DA5] to-[#001B6A] rounded-lg border border-white/10 p-3 flex flex-col justify-between relative overflow-hidden transition-all duration-300 ${selected === "rbc" ? "shadow-[0_0_20px_rgba(0,93,170,0.9)]" : "shadow-2xl"}`}
-                >
-                  {/* RBC Wavy Pattern */}
-                  <div className="absolute inset-0 opacity-20 pointer-events-none">
-                    <svg viewBox="0 0 100 100" className="w-full h-full">
-                      <path
-                        d="M0 50 Q 25 25, 50 50 T 100 50"
-                        fill="none"
-                        stroke="white"
-                        strokeWidth="2"
-                      />
-                      <path
-                        d="M0 60 Q 25 35, 50 60 T 100 60"
-                        fill="none"
-                        stroke="white"
-                        strokeWidth="2"
-                      />
-                      <path
-                        d="M0 40 Q 25 15, 50 40 T 100 40"
-                        fill="none"
-                        stroke="white"
-                        strokeWidth="2"
-                      />
-                    </svg>
-                  </div>
-                  <div className="flex justify-between items-start relative z-10">
-                    <div className="flex items-center gap-1">
-                      <div className="w-5 h-5 bg-yellow-400 rounded-sm flex items-center justify-center">
-                        <span className="text-[8px] font-black text-[#003DA5]">
-                          RBC
+                  ) : (
+                    cardBalances.slice(0, 5).map(({ card, balance }) => (
+                      <div
+                        key={card.id}
+                        className="flex justify-between items-center"
+                      >
+                        <span className="text-[9px] font-semibold text-white/45 truncate max-w-[64px]">
+                          {card.name}
+                        </span>
+                        <span className="text-[10px] font-black text-white/80">
+                          ${balance.toLocaleString()}
                         </span>
                       </div>
-                      <span className="text-[6px] font-bold text-white tracking-tighter">
-                        Royal Bank
-                      </span>
-                    </div>
-                    <CreditCard size={12} className="text-white/40" />
-                  </div>
-                  <div className="relative z-10">
-                    <p className="text-[6px] font-mono text-white/40">
-                      **** **** **** 4242
-                    </p>
-                    <p className="text-xs font-bold text-white">
-                      ${online.toLocaleString()}
-                    </p>
-                  </div>
-                  <div className="text-[6px] font-bold text-white/60 relative z-10">
-                    G RAYMOND
-                  </div>
-                  {/* Chip */}
-                  <div className="absolute top-1/2 right-3 -translate-y-1/2 w-6 h-5 bg-yellow-200/30 rounded-sm border border-white/10"></div>
+                    ))
+                  )}
                 </div>
-              </motion.div>
-            </AnimatePresence>
-
-            {/* Cyber Coin - Bottom Right Pocket */}
-            <div className="absolute bottom-4 left-4 right-4 h-16 bg-[#3D2B1F] rounded-2xl border-t border-white/10 shadow-inner flex items-center justify-center overflow-visible">
-              <AnimatePresence>
-                <motion.div
-                  animate={{ y: 0, scale: 1 }}
-                  onClick={() =>
-                    setSelected(selected === "online" ? null : "online")
-                  }
-                  className={`relative w-20 h-20 cursor-pointer ${selected === "online" ? "z-50" : "z-10"}`}
+              </div>
+              <div
+                style={{ flex: 1 }}
+                className="border-t border-white/[0.07] pt-3 flex flex-col overflow-hidden"
+              >
+                <p className="text-[7px] font-black uppercase tracking-normal text-[#C8A96E]/45 mb-1 shrink-0">
+                  Digital
+                </p>
+                <div
+                  className="space-y-1 overflow-y-auto"
+                  style={{ scrollbarWidth: "none" }}
                 >
-                  <div
-                    className={`absolute inset-0 rounded-full bg-cyan-400/10 backdrop-blur-xl border-2 border-cyan-400/60 flex items-center justify-center overflow-hidden transition-all duration-300 ${selected === "online" ? "shadow-[0_0_30px_rgba(34,211,238,0.8)]" : "shadow-[0_0_20px_rgba(34,211,238,0.4)]"}`}
-                  >
-                    <div className="absolute inset-1 rounded-full border border-cyan-400/40 animate-[spin_10s_linear_infinite]"></div>
-                    <div className="relative z-10 flex flex-col items-center">
-                      <span className="text-[8px] font-black text-white drop-shadow-[0_0_5px_rgba(255,255,255,0.8)]">
-                        ${online.toLocaleString()}
+                  {digitalBalance.map(({ digital, balance }) => (
+                    <div
+                      key={digital.id}
+                      className="flex justify-between items-center"
+                    >
+                      <span className="text-[9px] font-semibold text-white/45 truncate max-w-[64px]">
+                        {digital.name}
+                      </span>
+                      <span className="text-[10px] font-black text-white/80">
+                        ${balance.toLocaleString()}
                       </span>
                     </div>
-                  </div>
-                </motion.div>
-              </AnimatePresence>
+                  ))}
+                </div>
+              </div>
             </div>
           </div>
 
-          {/* Stitching Detail */}
-          <div className="absolute inset-0 border-[6px] border-dashed border-black/30 rounded-[32px] pointer-events-none m-1"></div>
-
-          {/* Center Fold Line */}
-          <div className="absolute left-1/2 top-0 bottom-0 w-1 bg-black/40 -translate-x-1/2 blur-[1px]"></div>
+          {/* ── COVER — full-width, opens like a book ── */}
+          <motion.div
+            animate={{ rotateY: isOpen ? 180 : 0 }}
+            transition={{ duration: 0.9, ease: [0.65, 0, 0.35, 1] }}
+            className="absolute inset-0 rounded-2xl"
+            style={{
+              transformOrigin: "left center",
+              transformStyle: "preserve-3d",
+              zIndex: 2,
+            }}
+          >
+            {/* Leather exterior — front face only, disappears when open */}
+            <div
+              className="absolute inset-0 rounded-2xl overflow-hidden"
+              style={{ background: leatherBg, backfaceVisibility: "hidden" }}
+            >
+              {/* Grain */}
+              <svg className="absolute inset-0 w-full h-full opacity-[0.07] pointer-events-none">
+                <filter id="lgrain">
+                  <feTurbulence
+                    type="fractalNoise"
+                    baseFrequency="0.7"
+                    numOctaves="4"
+                    stitchTiles="stitch"
+                  />
+                  <feColorMatrix type="saturate" values="0" />
+                </filter>
+                <rect width="100%" height="100%" filter="url(#lgrain)" />
+              </svg>
+              <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-white/20 via-white/10 to-transparent" />
+              <div className="absolute inset-x-0 bottom-0 h-4 bg-gradient-to-t from-black/40 to-transparent" />
+              <div className="absolute inset-[8px] rounded-xl border border-dashed border-[#C8A96E]/28 pointer-events-none" />
+              {/* Gold clasp center-right */}
+              <div className="absolute right-5 top-1/2 -translate-y-1/2">
+                <div className="w-[14px] h-[14px] rounded-full bg-gradient-to-br from-[#E0C070] to-[#8B6914] shadow-[0_2px_5px_rgba(0,0,0,0.55),inset_0_1px_0_rgba(255,255,255,0.3)] border border-[#C9A84C]/50" />
+              </div>
+            </div>
+          </motion.div>
         </div>
-      </div>
-
-      {/* Total Tag */}
-      <div className="bg-black text-white px-8 py-4 rounded-3xl shadow-2xl flex justify-between items-center mx-auto max-w-xs border border-white/10">
-        <span className="text-[10px] font-black text-white/40 uppercase tracking-[0.3em]">
-          Total Assets
-        </span>
-        <span className="text-2xl font-black tracking-tighter">
-          ${total.toLocaleString()}
-        </span>
       </div>
     </div>
   );
@@ -1609,8 +1636,7 @@ function ExpenseForm({
   primaryCurrency,
   exchangeRates,
   hasCash,
-  hasDigital,
-  hasOther,
+  digitalAccount,
   cards,
   onSubmit,
   onSubmitIncome,
@@ -1620,8 +1646,7 @@ function ExpenseForm({
   primaryCurrency: Currency;
   exchangeRates: Record<string, number>;
   hasCash: boolean;
-  hasDigital: boolean;
-  hasOther: boolean;
+  digitalAccount: Digital[];
   cards: Card[];
   onSubmit: (expense: Omit<OutputExpense, "id" | "date">) => void;
   onSubmitIncome: (expense: Omit<InputExpense, "id" | "date">) => void;
@@ -1635,7 +1660,7 @@ function ExpenseForm({
 
   const defaultMethod = hasCash
     ? "cash"
-    : (cards[0]?.id ?? (hasDigital ? "digital" : "other"));
+    : (cards[0]?.id ?? digitalAccount[0]?.id ?? "cash");
   const [method, setMethod] = useState(defaultMethod);
 
   const convertToPrimary = (amt: number, cur: Currency) => {
@@ -1667,8 +1692,7 @@ function ExpenseForm({
   const paymentOptions = [
     ...(hasCash ? [{ id: "cash", label: "Cash" }] : []),
     ...cards.map((c) => ({ id: c.id, label: c.name })),
-    ...(hasDigital ? [{ id: "digital", label: "Digital" }] : []),
-    ...(hasOther ? [{ id: "other", label: "Other" }] : []),
+    ...digitalAccount.map((d) => ({ id: d.id, label: d.name })),
   ];
 
   const sym = CURRENCY_SYMBOLS[currency];
@@ -1676,19 +1700,27 @@ function ExpenseForm({
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
-        <div className="flex flex-col gap-1">
-          <div className="flex items-center gap-2">
-            <h2 className="text-xl font-semibold tracking-tight">
-              {type === "expense" ? "Add Expense" : "Add Income"}
-            </h2>
-            <button
-              type="button"
-              onClick={() => setType(type === "expense" ? "income" : "expense")}
-              className="text-sm text-black/40 hover:text-black/60 transition-colors"
-            >
-              {type === "expense" ? "Add Income ↓" : "Add Expense ↓"}
-            </button>
-          </div>
+        <div className="flex bg-black/5 rounded-2xl p-1 flex-1 mr-4">
+          <button
+            type="button"
+            onClick={() => setType("expense")}
+            className={`flex-1 py-2 rounded-xl text-sm font-semibold transition-all ${
+              type === "expense"
+                ? "bg-white shadow text-black"
+                : "text-black/40"
+            }`}
+          >
+            Expense
+          </button>
+          <button
+            type="button"
+            onClick={() => setType("income")}
+            className={`flex-1 py-2 rounded-xl text-sm font-semibold transition-all ${
+              type === "income" ? "bg-white shadow text-black" : "text-black/40"
+            }`}
+          >
+            Income
+          </button>
         </div>
         <button
           onClick={onCancel}
@@ -1747,7 +1779,7 @@ function ExpenseForm({
           {/* Payment Method */}
           <div className="space-y-2">
             <label className="text-xs font-semibold uppercase tracking-wider text-black/40">
-              Pay with
+              {type === "income" ? "Add to" : "Pay with"}
             </label>
             <div className="flex flex-wrap gap-2">
               {paymentOptions.map((opt) => (
@@ -1764,26 +1796,28 @@ function ExpenseForm({
           </div>
 
           {/* Category */}
-          <div className="space-y-2">
-            <label className="text-xs font-semibold uppercase tracking-wider text-black/40">
-              Category
-            </label>
-            <div className="grid grid-cols-4 gap-2">
-              {categories.map((cat) => (
-                <button
-                  key={cat}
-                  type="button"
-                  onClick={() => setCategory(cat)}
-                  className={`flex flex-col items-center gap-1 p-2 rounded-xl border transition-all ${category === cat ? "bg-slate-400 text-white border-slate-400" : "bg-white text-black/60 border-black/5 hover:border-slate-200"}`}
-                >
-                  <span className="text-lg">{getCategoryEmoji(cat)}</span>
-                  <span className="text-[8px] font-bold uppercase truncate w-full text-center">
-                    {cat}
-                  </span>
-                </button>
-              ))}
+          {type === "expense" && (
+            <div className="space-y-2">
+              <label className="text-xs font-semibold uppercase tracking-wider text-black/40">
+                Category
+              </label>
+              <div className="grid grid-cols-4 gap-2">
+                {categories.map((cat) => (
+                  <button
+                    key={cat}
+                    type="button"
+                    onClick={() => setCategory(cat)}
+                    className={`flex flex-col items-center gap-1 p-2 rounded-xl border transition-all ${category === cat ? "bg-slate-400 text-white border-slate-400" : "bg-white text-black/60 border-black/5 hover:border-slate-200"}`}
+                  >
+                    <span className="text-lg">{getCategoryEmoji(cat)}</span>
+                    <span className="text-[8px] font-bold uppercase truncate w-full text-center">
+                      {cat}
+                    </span>
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Note */}
           <div className="space-y-2">
@@ -1812,15 +1846,27 @@ function ExpenseForm({
 }
 
 function FixedExpenseForm({
+  hasCash,
+  cards,
+  digitalAccount,
   onSubmit,
   onCancel,
 }: {
+  hasCash: boolean;
+  cards: Card[];
+  digitalAccount: Digital[];
   onSubmit: (expense: Omit<FixedExpense, "id">) => void;
   onCancel: () => void;
 }) {
+  const paymentOptions = [
+    ...(hasCash ? [{ id: "cash", label: "Cash" }] : []),
+    ...cards.map((c) => ({ id: c.id, label: c.name })),
+    ...digitalAccount.map((d) => ({ id: d.id, label: d.name })),
+  ];
+
   const [name, setName] = useState("");
   const [amount, setAmount] = useState("");
-  const [method, setMethod] = useState("cash");
+  const [method, setMethod] = useState(paymentOptions[0]?.id ?? "cash");
   const [currency, setCurrency] = useState<Currency>("CAD");
   const [frequency, setFrequency] = useState<Frequency>("monthly");
   const [nextDueDate, setNextDueDate] = useState(
@@ -1873,28 +1919,17 @@ function FixedExpenseForm({
         <label className="text-[10px] font-semibold uppercase tracking-wider text-black/40">
           Payment Method
         </label>
-        <div className="grid grid-cols-3 gap-2">
-          <button
-            type="button"
-            onClick={() => setMethod("Cash")}
-            className={`py-2 rounded-lg text-[10px] font-bold uppercase border transition-all ${method === "Cash" ? "bg-slate-400 text-white border-slate-400" : "bg-white text-black/60 border-black/5"}`}
-          >
-            Cash
-          </button>
-          <button
-            type="button"
-            onClick={() => setMethod("PocketMoney")}
-            className={`py-2 rounded-lg text-[10px] font-bold uppercase border transition-all ${method === "PocketMoney" ? "bg-slate-400 text-white border-slate-400" : "bg-white text-black/60 border-black/5"}`}
-          >
-            Pocket
-          </button>
-          <button
-            type="button"
-            onClick={() => setMethod("Online")}
-            className={`py-2 rounded-lg text-[10px] font-bold uppercase border transition-all ${method === "Online" ? "bg-slate-400 text-white border-slate-400" : "bg-white text-black/60 border-black/5"}`}
-          >
-            Online
-          </button>
+        <div className="flex flex-wrap gap-2">
+          {paymentOptions.map((opt) => (
+            <button
+              key={opt.id}
+              type="button"
+              onClick={() => setMethod(opt.id)}
+              className={`py-2 px-3 rounded-lg text-[10px] font-bold uppercase border transition-all ${method === opt.id ? "bg-slate-400 text-white border-slate-400" : "bg-white text-black/60 border-black/5"}`}
+            >
+              {opt.label}
+            </button>
+          ))}
         </div>
       </div>
       <div className="space-y-2">
@@ -1974,8 +2009,7 @@ function InputForm({
   primaryCurrency,
   exchangeRates,
   hasCash,
-  hasDigital,
-  hasOther,
+  digitalAccount,
   cards,
   onSubmit,
   onCancel,
@@ -1983,8 +2017,7 @@ function InputForm({
   primaryCurrency: Currency;
   exchangeRates: Record<string, number>;
   hasCash: boolean;
-  hasDigital: boolean;
-  hasOther: boolean;
+  digitalAccount: Digital[];
   cards: Card[];
   onSubmit: (expense: Omit<InputExpense, "id" | "date">) => void;
   onCancel: () => void;
@@ -1995,7 +2028,7 @@ function InputForm({
 
   const defaultMethod = hasCash
     ? "cash"
-    : (cards[0]?.id ?? (hasDigital ? "digital" : "other"));
+    : (cards[0]?.id ?? digitalAccount[0]?.id ?? "cash");
   const [method, setMethod] = useState(defaultMethod);
 
   const convertToPrimary = (amt: number, cur: Currency) => {
@@ -2022,8 +2055,7 @@ function InputForm({
   const accountOptions = [
     ...(hasCash ? [{ id: "cash", label: "Cash" }] : []),
     ...cards.map((c) => ({ id: c.id, label: c.name })),
-    ...(hasDigital ? [{ id: "digital", label: "Digital" }] : []),
-    ...(hasOther ? [{ id: "other", label: "Other" }] : []),
+    ...digitalAccount.map((d) => ({ id: d.id, label: d.name })),
   ];
 
   const sym = CURRENCY_SYMBOLS[currency];
