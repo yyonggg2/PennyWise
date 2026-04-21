@@ -421,6 +421,7 @@ export default function App() {
             >
               <WalletView
                 cash={calculations.cashBalance}
+                hasCash={state.hasCash}
                 digitalBalance={calculations.digitalBalance}
                 cardBalances={calculations.cardBalances}
                 total={calculations.totalBalance}
@@ -1465,11 +1466,13 @@ function LoginScreen({ onLogin }: { onLogin: (email: string) => void }) {
 
 function WalletView({
   cash,
+  hasCash,
   digitalBalance,
   cardBalances,
   total,
 }: {
   cash: number;
+  hasCash: boolean;
   digitalBalance: { digital: Digital; balance: number }[];
   cardBalances: { card: { id: string; name: string }; balance: number }[];
   total: number;
@@ -1512,9 +1515,15 @@ function WalletView({
                 <p className="text-[7px] font-black uppercase tracking-normal text-[#C8A96E]/45">
                   Cash
                 </p>
-                <p className="mt-4 text-[15px] font-black text-white/75">
-                  ${cash.toLocaleString()}
-                </p>
+                {hasCash ? (
+                  <p className="mt-4 text-[15px] font-black text-white/75">
+                    ${cash.toLocaleString()}
+                  </p>
+                ) : (
+                  <p className="mt-4 text-[9px] text-white/20 italic">
+                    No cash added
+                  </p>
+                )}
               </div>
             </div>
 
@@ -1569,19 +1578,25 @@ function WalletView({
                   className="space-y-1 overflow-y-auto"
                   style={{ scrollbarWidth: "none" }}
                 >
-                  {digitalBalance.map(({ digital, balance }) => (
-                    <div
-                      key={digital.id}
-                      className="flex justify-between items-center"
-                    >
-                      <span className="text-[9px] font-semibold text-white/45 truncate max-w-[64px]">
-                        {digital.name}
-                      </span>
-                      <span className="text-[10px] font-black text-white/80">
-                        ${balance.toLocaleString()}
-                      </span>
-                    </div>
-                  ))}
+                  {digitalBalance.length === 0 ? (
+                    <p className="text-[9px] text-white/20 italic">
+                      No digital accounts
+                    </p>
+                  ) : (
+                    digitalBalance.map(({ digital, balance }) => (
+                      <div
+                        key={digital.id}
+                        className="flex justify-between items-center"
+                      >
+                        <span className="text-[9px] font-semibold text-white/45 truncate max-w-[64px]">
+                          {digital.name}
+                        </span>
+                        <span className="text-[10px] font-black text-white/80">
+                          ${balance.toLocaleString()}
+                        </span>
+                      </div>
+                    ))
+                  )}
                 </div>
               </div>
             </div>

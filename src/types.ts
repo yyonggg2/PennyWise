@@ -57,10 +57,14 @@ export interface Card {
   initialBalance: number;
 }
 
+export interface Digital {
+  id: string;
+  name: string;
+  initialBalance: number;
+}
+
 export interface InitialFunds {
   cash: number;
-  digital: number;
-  other: number;
 }
 
 export interface OutputExpense {
@@ -100,8 +104,7 @@ export interface AppState {
   primaryCurrency: Currency;
   cards: Card[];
   hasCash: boolean;
-  hasDigital: boolean;
-  hasOther: boolean;
+  digitalAccount: Digital[];
   initialFunds: InitialFunds;
   fixedExpenses: FixedExpense[];
   variableExpenses: OutputExpense[];
