@@ -37,16 +37,20 @@ Create an account or sign in with Google to get started.
 
 ### 1. Memory Leak Prevention
 
-** With Optimizaiton**
+**With Optimizaiton**
+
 `return () => clearInterval(interval);`
 
 With the `clearInterval()` method, we maked sure whenever a new interval is going to be created, we delete the previous interval, preventing the web from memory leak.
 
 ### 2. Expensive Calculation Prevention
 
-** With Optimizaiton**
+**With Optimizaiton**
+
 `const calculations = useMemo(() => { ... }, [state]);`
-** Without **
+
+**Without**
+
 `const calculations = (() => { ... })();`
 
 The difference is `useMemo()` at the start and `[state]`at the end. These two additions cache the result and skip recalculation when `[state]` hasn't changed.
