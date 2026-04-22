@@ -1,6 +1,6 @@
 # PennyWise
 
-Manage your penny wise by keep in track of budget.
+My personal wallet. Aimed to help myself stay on top of my money without the overwhelm. One place to track what I spend, what's coming in, and what bills are due — across cash, cards, and digital accounts, in whatever currency.
 
 ## Features
 
