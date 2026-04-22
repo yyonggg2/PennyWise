@@ -35,42 +35,21 @@ Create an account or sign in with Google to get started.
 
 ## Optimizations
 
-1. Memory Leak Prevention
+### 1. Memory Leak Prevention
 
-- Without Optimizaiton:
+** With Optimizaiton**
+`return () => clearInterval(interval);`
 
-  ```useEffect(() => {
-  fetch(`https://api.frankfurter.app/latest?from=${state.primaryCurrency}`)
-    .then((r) => r.json())
-    .then((data) => setState((prev) => ({ ...prev, exchangeRates: data.rates })));
+With the `clearInterval()` method, we maked sure whenever a new interval is going to be created, we delete the previous interval, preventing the web from memory leak.
 
-  setInterval(() => {
-    fetch(`https://api.frankfurter.app/latest?from=${state.primaryCurrency}`)
-      .then((r) => r.json())
-      .then((data) => setState((prev) => ({ ...prev, exchangeRates: data.rates })));
-  }, 3600000);
-  // ← no cleanup. every currency change stacks a new interval on top
-  }, [state.primaryCurrency]);
-  ```
+### 2. Expensive Calculation Prevention
 
-````
-- With Optimization:
-``` \useEffect(() => {
-  const fetchRates = () => {
-    fetch(`https://api.frankfurter.app/latest?from=${state.primaryCurrency}`)
-      .then((r) => r.json())
-      .then((data) => setState((prev) => ({ ...prev, exchangeRates: data.rates })));
-  };
+** With Optimizaiton**
+`const calculations = useMemo(() => { ... }, [state]);`
+** Without **
+`const calculations = (() => { ... })();`
 
-  fetchRates();
-  const interval = setInterval(fetchRates, 3600000);
-  return () => clearInterval(interval); // ← kills old interval before new one starts
-}, [state.primaryCurrency]);
-````
-
-2. Expensive Calculation Prevention
-
--
+The difference is `useMemo()` at the start and `[state]`at the end. These two additions cache the result and skip recalculation when `[state]` hasn't changed.
 
 ## ScreenShots
 
