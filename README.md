@@ -21,7 +21,7 @@ Manage your penny wise by keep in track of budget.
 
 ## Getting Started
 
-Visit:
+Visit: https://penny-wise-woad.vercel.app/
 Create an account or sign in with Google to get started.
 
 ## Usage
@@ -35,8 +35,11 @@ Create an account or sign in with Google to get started.
 
 ## ScreenShots
 
-![Home Screen]
-![Add]
+![Home Screen](frontPage.png)
+![Add Income](addIncome.png)
+![Add Cost](addCost.png)
+![View History](viewHistory.png)
+![Fixed Payments](fixExpense.png)
 
 ## License
 
