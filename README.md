@@ -57,11 +57,11 @@ The difference is `useMemo()` at the start and `[state]`at the end. These two ad
 
 ## ScreenShots
 
-![Home Screen](frontPage.png)
-![Add Income](addIncome.png)
-![Add Cost](addCost.png)
-![View History](viewHistory.png)
-![Fixed Payments](fixExpense.png)
+![Home Screen](ScreenShots/frontPage.png)
+![Add Income](ScreenShots/addIncome.png)
+![Add Cost](ScreenShots/addCost.png)
+![View History](ScreenShots/viewHistory.png)
+![Fixed Payments](ScreenShots/fixExpense.png)
 
 ## License
 
