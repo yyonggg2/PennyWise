@@ -17,7 +17,7 @@ Manage your penny wise by keep in track of budget.
 - Framer Motion — animations
 - Supabase — authentication + database (cloud sync)
 - Lucide React — icons
-- Frankfurter API — live currency exchange rates
+- Frankfurter API — live currency exgitchange rates
 
 ## Getting Started
 

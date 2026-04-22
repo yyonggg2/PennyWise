@@ -993,8 +993,7 @@ function SetupWizard({
   const [hasDigital, setHasDigital] = useState(false);
 
   const [cards, setCards] = useState<Card[]>([
-    { id: crypto.randomUUID(), name: "RBC", initialBalance: 0 },
-    { id: crypto.randomUUID(), name: "Visa", initialBalance: 0 },
+    { id: crypto.randomUUID(), name: "", initialBalance: 0 },
   ]);
   const [cashBalance, setCashBalance] = useState("");
   const [digitalAccount, setDigitalAccount] = useState<Digital[]>([
@@ -1009,6 +1008,11 @@ function SetupWizard({
       ...prev,
       { id: crypto.randomUUID(), name: "", initialBalance: 0 },
     ]);
+  };
+
+  const removeCard = (id: string) => {
+    if (cards.length <= 1) return;
+    setCards((prev) => prev.filter((c) => c.id !== id));
   };
 
   const addDigital = () => {
@@ -1185,7 +1189,7 @@ function SetupWizard({
                 Set up your cards
               </h1>
               <p className="text-black/40 text-sm mt-1">
-                Up to 5 cards. RBC and Visa are pre-added.
+                Up to 5 cards. Add as many as you need.
               </p>
             </div>
             <div className="space-y-3">
@@ -1194,8 +1198,18 @@ function SetupWizard({
                   key={card.id}
                   className="bg-[#F5F5F5] rounded-2xl p-4 space-y-3"
                 >
-                  <div className="text-xs font-bold text-black/40 uppercase tracking-wider">
-                    Card {i + 1}
+                  <div className="flex items-center justify-between">
+                    <div className="text-xs font-bold text-black/40 uppercase tracking-wider">
+                      Card {i + 1}
+                    </div>
+                    {cards.length > 1 && (
+                      <button
+                        onClick={() => removeCard(card.id)}
+                        className="text-black/30 hover:text-red-400 transition-colors text-lg leading-none"
+                      >
+                        ×
+                      </button>
+                    )}
                   </div>
                   <input
                     type="text"
